@@ -1,26 +1,29 @@
-FROM registry.access.redhat.com/ubi8/python-311:1-8.1687187517 AS builder
+# Build the manager binary
+ARG BASE_IMAGE=
+FROM $BASE_IMAGE as builder
 
-COPY --chown=1001:0 . /app-src
-RUN pip install --no-cache-dir /app-src
+WORKDIR /workspace
 
-FROM registry.access.redhat.com/ubi8/ubi-minimal:8.8-860
+COPY hack/boilerplate.go.txt hack/boilerplate.go.txt
 
-ENV VIRTUAL_ENV='/opt/app-root'
-ENV APP_SRC='/app-src'
+# Copy the go source
+COPY main.go main.go
+COPY config/ config/
+COPY apis/ apis/
+COPY controllers/ controllers/
 
-RUN microdnf install -y python3.11-3.11.2-2.el8_8.1.x86_64 libpq-devel \
-    && microdnf clean all
+RUN make manifests generate fmt vet release
 
-RUN mkdir $APP_SRC && chown 1001:0 $APP_SRC
+# Build
+RUN CGO_ENABLED=1 GOOS=linux GO111MODULE=on go build -o manager main.go
 
-USER 1001
+# Use distroless as minimal base image to package the manager binary
+# Refer to https://github.com/GoogleContainerTools/distroless for more details
+FROM registry.access.redhat.com/ubi8/ubi-minimal:8.8-1072.1697626218
+WORKDIR /
+COPY --from=builder /workspace/manager .
+COPY --from=builder /workspace/manifest.yaml .
+COPY jsons ./jsons/
+USER 65534:65534
 
-COPY --from=builder  /opt/app-root $VIRTUAL_ENV
-COPY --from=builder  /app-src $APP_SRC
-
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
-WORKDIR /app-src
-
-ENTRYPOINT ["python", "manage.py"]
-CMD ["runserver", "0.0.0.0:8000"]
+ENTRYPOINT ["/manager"]
